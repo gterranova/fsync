@@ -1,0 +1,2 @@
+glob:miktex-portable/*
+glob:*.pyc

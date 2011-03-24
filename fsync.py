@@ -22,7 +22,10 @@ except ImportError:
     # maybe we are on the remote file walker
     ftputil_FTPHost = object
     pass
-    
+
+# Used for copying file objects; value is 64 KB.
+CHUNK_SIZE = 64*1024
+
 def md5file(path):
     if os.path.isdir(path):
         return None
@@ -93,7 +96,7 @@ def dircmp(set1, set2, prepend='', verbose=False):
 #                print "= %s%s" % (prepend, f)       
                 pass
             else:
-                if verbose: print "M %s%s" % (prepend, f)       
+                if verbose: print "M %s%s" % (prepend, f)
                 actions.append(("copy", "%s%s" % (prepend, f)))
 
     if dir1 - dir2:
@@ -113,7 +116,7 @@ def dircmp(set1, set2, prepend='', verbose=False):
 #        print "Sub in common:"
         for f in dir1 & dir2:
 #            print "%s/%s" % (prepend, f)
-            actions.extend( dircmp(set1['subdirs'][f], set2['subdirs'][f], "%s%s" % (prepend, f)) )
+            actions.extend(dircmp(set1['subdirs'][f], set2['subdirs'][f], "%s%s" % (prepend, f)))
     return actions
 
 class FTPPath(ftputil_FTPHost):
@@ -143,12 +146,20 @@ class LocalPath:
 #        if not os.path.isdir(p.path):
 #            raise Exception("Invalid local path '%s'." % p.path)
 #            return
-        self.basepath = os.path.abspath(p.path)
+        self.basepath = os.path.abspath(p)
         self.path = os.path
         self.mkdir = os.mkdir
         self.remove = os.remove
         self.rmtree = shutil.rmtree
 
+    def open(self, path, mode):
+        """
+        Return a Python file object for file name `path`, opened in
+        mode `mode`.
+        """
+        # This is the built-in `open` function, not `os.open`!
+        return open(path, mode)
+      
     def walkdir(self):
         return walkdir(self.basepath)        
 
@@ -166,10 +177,10 @@ class FileSync:
             p = urlparse(path)
             if p.scheme == 'ftp':
                 return FTPPath(p, verbose=verbose)
-            elif p.scheme == '':
-                return LocalPath(p, verbose=verbose)      
+            elif os.path.exists(os.path.dirname(path)):
+                return LocalPath(path, verbose=verbose)      
             else:
-                raise Exception("Unsupported scheme '%s'." % scheme)
+                raise Exception("Unsupported scheme '%s' or invalid path '%s'." % (p.scheme, path))
 
         self.source = host_class(source)
         self.target = host_class(target)    
@@ -193,32 +204,43 @@ class FileSync:
             
         
     def compare(self):
-        if self._mkdir(self.target.basepath):
+        if not self.target.path.isdir(self.target.basepath):
             target_walk = {'subdirs': {}}
         else:
             target_walk = self.target.walkdir()
         self.actions = dircmp(self.source.walkdir(), target_walk, verbose=self.verbose)
+        return self.actions
 
     def sync(self):
+        self._mkdir(self.target.basepath)
         for (action, path) in self.actions:
             src = self.source.abspath(path)
             dst = self.target.abspath(path)
-            if action == 'copy':            
-                if isinstance(self.source, LocalPath) and isinstance(self.target, LocalPath):
-                    shutil.copyfile(src, dst)
-                elif isinstance(self.source, LocalPath) and isinstance(self.target, FTPPath):
-                    # upload
-                    self.target.upload(src, dst, mode='b')
-                elif isinstance(self.source, FTPPath) and isinstance(self.target, LocalPath):
-                    # download
-                    self.source.download(src, dst, mode='b')
-                elif isinstance(self.source, FTPPath) and isinstance(self.target, FTPPath):
-                    # ????
-                    source = self.source.file(src, 'rb')
-                    target = self.target.file(dst, 'wb')
-                    self.target.host.copyfileobj(source, target)
-                    source.close()
-                    target.close()
+            if action == 'copy':
+                source = self.source.open(src, "rb")
+                try:
+                    target = self.target.open(dst, "wb")
+                    try:
+                        shutil.copyfileobj(source, target, length=CHUNK_SIZE)
+                    finally:
+                        target.close()
+                finally:
+                    source.close()               
+##                if isinstance(self.source, LocalPath) and isinstance(self.target, LocalPath):
+##                    shutil.copyfile(src, dst)
+##                elif isinstance(self.source, LocalPath) and isinstance(self.target, FTPPath):
+##                    # upload
+##                    self.target.upload(src, dst, mode='b')
+##                elif isinstance(self.source, FTPPath) and isinstance(self.target, LocalPath):
+##                    # download
+##                    self.source.download(src, dst, mode='b')
+##                elif isinstance(self.source, FTPPath) and isinstance(self.target, FTPPath):
+##                    # ????
+##                    source = self.source.file(src, 'rb')
+##                    target = self.target.file(dst, 'wb')
+##                    self.target.host.copyfileobj(source, target)
+##                    source.close()
+##                    target.close()
                 print action, src, "->", dst
             else:
                 print action, dst

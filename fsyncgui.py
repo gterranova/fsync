@@ -90,15 +90,16 @@ class FsyncDialog(wx.Dialog):
         fsync.compare()
         dlg = ActionsDialog(None, -1, "Changes", fsync.actions)
         dlg.ShowModal()
-        fsync.actions = dlg.actions
+        fsync.actions = dlg.actions        
         dlg.Destroy()
 
         self.items[src] = dst
         f = open("fsync.dat", "w")
         f.write(pickle.dumps(self.items))
         f.close()
-
-        fsync.sync()
+        def cb(*args):
+            print " ".join(args)
+        fsync.sync(callback=cb)
         fsync.close()
 # end of class FsyncDialog
 

@@ -6,9 +6,9 @@ import shutil
 from urlparse import urlparse
     
 try: 
-   from hashlib import md5
+    from hashlib import md5
 except ImportError:
-   from md5 import md5
+    from md5 import md5
 
 try:
     import cPickle as pickle
@@ -26,100 +26,48 @@ except ImportError:
 # Used for copying file objects; value is 64 KB.
 CHUNK_SIZE = 64*1024
 
-def md5file(path):
-    if os.path.isdir(path):
-        return None
+class CommonPath:
+    def md5file(self, path):
+        if self.path.isdir(path):
+            return None
     
-    # Do md5 check to make sure the file downloaded properly
-    checksum = md5()
-    f = file(path, 'rb')
-    # Although the files are small, we can't guarantee the available memory nor that there
-    # won't be large files in the future, so read the file in small parts (1kb at time)
-    while True:
-        part = f.read(1024)
-        if not part:
-            break # end of file        
-        checksum.update(part)               
-    f.close()            
-    # Do we have a match?
-    return checksum.hexdigest()
+        # Do md5 check to make sure the file downloaded properly
+        checksum = md5()
+        f = self.open(path, 'rb')
+        # Although the files are small, we can't guarantee the available memory nor that there
+        # won't be large files in the future, so read the file in small parts (1kb at time)
+        while True:
+            part = f.read(CHUNK_SIZE)
+            if not part:
+                break # end of file        
+            checksum.update(part)               
+        f.close()            
+        # Do we have a match?
+        return checksum.hexdigest()
 
-def walkdir(path):
-    #print "::walkdir %s" % path
-    if path[-1] != os.sep:
-        path = "%s%s" % (path, os.sep)
-    pathlen = len(path)-1        
-    listdir = set(os.listdir(path))
+    def walkdir(self, path):
+        #print "::walkdir %s" % path
+        if path[-1] != self.sep:
+            path = "%s%s" % (path, self.sep)
+        pathlen = len(path)-1        
+        listdir = set(self.listdir(path))
 
-    ret = {'subdirs': {}}
-    def set_item(name):
-        fullpath = os.path.join(path, name)
-        basepath = fullpath[pathlen:].replace("\\", "/")
-        if not os.path.isdir(fullpath):
-            ret[basepath] = md5file(fullpath)
-        else:
-            ret['subdirs']["%s%s" % ("/", name)] = walkdir(fullpath)
-
-    map(set_item, listdir)    
-    return ret
-    
-def dircmp(set1, set2, prepend='', verbose=False):
-    files1 = set(set1.keys())-set(['subdirs'])
-    files2 = set(set2.keys())-set(['subdirs'])
-    actions = []
-    
-    if set1.has_key('subdirs'):
-        dir1 = set(set1['subdirs'].keys())
-    else:
-        dir1 = set()
-
-    if set2.has_key('subdirs'):
-        dir2 = set(set2['subdirs'].keys())
-    else:
-        dir2 = set()
-
-    if files1 - files2:
-#        print "files only in 1:"
-        for f in files1 - files2:
-            if verbose: print "+ %s%s" % (prepend, f)
-            actions.append(("copy", "%s%s" % (prepend, f)))
-    if files2 - files1:
-#        print "files only in 2:"
-        for f in files2 - files1:
-            if verbose: print "- %s%s" % (prepend, f)
-            actions.append(("remove", "%s%s" % (prepend, f)))            
-
-    if files2 & files1:
-#        print "files in common:"
-        for f in files1 & files2:
-            if set1[f] == set2[f]:
-#                print "= %s%s" % (prepend, f)       
-                pass
+        ret = {'subdirs': {}}
+        def set_item(name):
+            fullpath = self.path.join(path, name)
+            basepath = fullpath[pathlen:].replace("\\", "/")
+            if not self.path.isdir(fullpath):
+                ret[basepath] = None #self.md5file(fullpath)
             else:
-                if verbose: print "M %s%s" % (prepend, f)
-                actions.append(("copy", "%s%s" % (prepend, f)))
+                ret['subdirs']["%s%s" % ("/", name)] = self.walkdir(fullpath)
 
-    if dir1 - dir2:
-#        print "Sub only in 1:"
-        for f in dir1 - dir2:
-            if verbose: print "D+ %s%s" % (prepend, f)
-            actions.append(("mkdir", "%s%s" % (prepend, f)))
-            actions.extend( dircmp(set1['subdirs'][f], {}, "%s%s" % (prepend, f)) )
+        map(set_item, listdir)    
+        return ret
 
-    if dir2 - dir1:
-#        print "Sub only in 2:"
-        for f in dir2 - dir1:
-            if verbose: print "D- %s%s" % (prepend, f)
-            actions.append(("rmtree", "%s%s" % (prepend, f)))            
+    def abspath(self, path):
+        return "%s%s" % (self.basepath, path)
 
-    if dir1 & dir2:
-#        print "Sub in common:"
-        for f in dir1 & dir2:
-#            print "%s/%s" % (prepend, f)
-            actions.extend(dircmp(set1['subdirs'][f], set2['subdirs'][f], "%s%s" % (prepend, f)))
-    return actions
-
-class FTPPath(ftputil_FTPHost):
+class FTPPath(ftputil_FTPHost, CommonPath):
     def __init__(self, p, verbose=True):
         username = p.username
         if not username:
@@ -134,23 +82,28 @@ class FTPPath(ftputil_FTPHost):
         self.verbose = verbose    
         ftputil.FTPHost.__init__(self, p.hostname, username, password)
         self.basepath = p.path
+        self.synchronize_times()
 
-    def abspath(self, path):
-        return "%s%s" % (self.basepath, path)
+    def mtime(self, path):
+        """Return the timestamp for the last modification in seconds."""
+        # Convert to client time zone (see definition of time
+        #  shift in docstring of `FTPHost.set_time_shift`).
+        return self.path.getmtime(self.abspath(path)) - self.time_shift()
+
+    def mtime_precision(self, path):
+        """Return the precision of the last modification time in seconds."""
+        # I think using `stat` instead of `lstat` makes more sense here.
+        return self.stat(self.abspath(path))._st_mtime_precision
                 
-    def walkdir(self):
-        return remote_walkdir(self.basepath)
-
-class LocalPath:
+class LocalPath(CommonPath):
     def __init__(self, p, verbose=True):
-#        if not os.path.isdir(p.path):
-#            raise Exception("Invalid local path '%s'." % p.path)
-#            return
         self.basepath = os.path.abspath(p)
+        self.sep = os.sep
         self.path = os.path
         self.mkdir = os.mkdir
         self.remove = os.remove
         self.rmtree = shutil.rmtree
+        self.listdir = os.listdir
 
     def open(self, path, mode):
         """
@@ -159,13 +112,17 @@ class LocalPath:
         """
         # This is the built-in `open` function, not `os.open`!
         return open(path, mode)
-      
-    def walkdir(self):
-        return walkdir(self.basepath)        
 
-    def abspath(self, path):
-        return "%s%s" % (self.basepath, path)
-                
+    def mtime(self, path):
+        """Return the timestamp for the last modification in seconds."""
+        return os.path.getmtime(self.abspath(path))
+
+    def mtime_precision(self, path):
+        """Return the precision of the last modification time in seconds."""
+        # Assume modification timestamps for local filesystems are
+        #  at least precise up to a second.
+        return 1.0
+                      
     def close(self):
         pass
 
@@ -207,15 +164,82 @@ class FileSync:
         if not self.target.path.isdir(self.target.basepath):
             target_walk = {'subdirs': {}}
         else:
-            target_walk = self.target.walkdir()
-        self.actions = dircmp(self.source.walkdir(), target_walk, verbose=self.verbose)
+            target_walk = self.target.walkdir(self.target.basepath)
+        self.actions = self.dircmp(self.source.walkdir(self.source.basepath), target_walk)
         return self.actions
 
-    def sync(self):
+    def filecmp(self, f):
+        return self.source_is_newer_than_target(f) and self.source.md5file(self.source.abspath(f)) != self.target.md5file(self.target.abspath(f))
+        #return self.source.md5file(self.source.abspath(f)) != self.target.md5file(self.target.abspath(f))
+
+    def source_is_newer_than_target(self, path):
+        """
+        Return `True` if the source is newer than the target, else `False`.
+       
+        Both arguments are `LocalFile` or `RemoteFile` objects.
+
+        For the purpose of this test the source is newer than the
+        target, if the target modification datetime plus its precision
+        is before the source precision. In other words: If in doubt,
+        the file should be transferred.
+        """
+        return self.source.mtime(path) + self.source.mtime_precision(path) >= \
+               self.target.mtime(path)
+
+    @staticmethod
+    def get_files_dirs(myset):
+        files = set(myset.keys())-set(['subdirs'])
+        try:
+            dirs = set(myset['subdirs'].keys())
+        except KeyError:
+            dirs = set()
+        return (files, dirs)
+
+    @staticmethod
+    def set_compare(set1, set2):
+        (files1, dir1) = FileSync.get_files_dirs(set1)
+        (files2, dir2) = FileSync.get_files_dirs(set2)
+        return (files1 - files2, # newfiles
+                files2 - files1, # removedfiles
+                files1 & files2, # commonfiles
+                dir1 - dir2,     # newdirs
+                dir2 - dir1,     # removeddirs
+                dir1 & dir2,     # commondirs
+                )
+   
+    def dircmp(self, set1, set2, prepend=''):
+        actions = []
+
+        (newfiles, removedfiles, commonfiles, newdirs, removeddirs, commondirs) = FileSync.set_compare(set1, set2)
+
+        def set_action(act, filename, condition=True):
+            if condition:
+                if self.verbose: print "%s %s%s" % (act, prepend, filename)
+                actions.append((act, "%s%s" % (prepend, filename)))
+
+        map(lambda x: set_action("copy", x), newfiles)
+        map(lambda x: set_action("remove", x), removedfiles)
+        map(lambda x: set_action("copy", x, self.filecmp("%s%s" % (prepend, x))), commonfiles)
+        map(lambda x: set_action("mkdir", x), newdirs)
+        map(lambda x: set_action("rmtree", x), removeddirs)
+       
+        for f in (newdirs | commondirs):
+            sub1 = set1['subdirs'][f]
+            try:
+                sub2 = set2['subdirs'][f]
+            except:
+                sub2 = {}
+            actions.extend( self.dircmp(sub1, sub2, "%s%s" % (prepend, f)) )
+           
+        return actions
+      
+    def sync(self, callback=None):
         self._mkdir(self.target.basepath)
         for (action, path) in self.actions:
             src = self.source.abspath(path)
             dst = self.target.abspath(path)
+            if callback:
+                callback(action, path)
             if action == 'copy':
                 source = self.source.open(src, "rb")
                 try:
@@ -226,24 +250,9 @@ class FileSync:
                         target.close()
                 finally:
                     source.close()               
-##                if isinstance(self.source, LocalPath) and isinstance(self.target, LocalPath):
-##                    shutil.copyfile(src, dst)
-##                elif isinstance(self.source, LocalPath) and isinstance(self.target, FTPPath):
-##                    # upload
-##                    self.target.upload(src, dst, mode='b')
-##                elif isinstance(self.source, FTPPath) and isinstance(self.target, LocalPath):
-##                    # download
-##                    self.source.download(src, dst, mode='b')
-##                elif isinstance(self.source, FTPPath) and isinstance(self.target, FTPPath):
-##                    # ????
-##                    source = self.source.file(src, 'rb')
-##                    target = self.target.file(dst, 'wb')
-##                    self.target.host.copyfileobj(source, target)
-##                    source.close()
-##                    target.close()
-                print action, src, "->", dst
+#                print action, src, "->", dst
             else:
-                print action, dst
+#                print action, dst
                 func = getattr(self.target, action)
                 func(dst)
 
@@ -255,8 +264,6 @@ def main():
     from optparse import OptionParser
 
     parser = OptionParser(usage="%prog [options] source dest", version="%prog 1.0")
-    parser.add_option('-u', '--user', dest='username', help='ftp username')
-    parser.add_option('-p', '--pass', dest="password", help='ftp password')
     parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help='Verbose')    
     (options, args) = parser.parse_args()
     if len(args) <2:
@@ -267,109 +274,7 @@ def main():
     fsync.compare()
     fsync.sync()
     fsync.close()
-    
-    sys.exit()
-    
-    stat = [None, None]
-    islocal = [True, True]
-    paths = [None, None]
-    host = [None, None]
-    for i in xrange(len(args)):
-        (scheme, netloc, path, params, q, f) = urlparse(args[i])
-        if scheme == 'ftp':
-            import ftputil
-            if options.verbose: print "Connecting to %s, u %s p %s..." % (netloc, options.user, options.password)
-            host[i] = ftputil.FTPHost(netloc, options.user, options.password)
-            #if not host[i].path.isdir(path):
-            #    print "Invalid remote path '%s'." % path
-            paths[i] = path
-            stat[i] = remote_walkdir(path)
-            islocal[i] = False
-        elif scheme == '':
-            if not os.path.isdir(path):
-                print "Invalid local path '%s'." % path
-                sys.exit()
-            paths[i] = os.path.abspath(path)
-            stat[i] = walkdir(path)
-        else:
-            print "Unsupported scheme '%s'." % scheme
-            sys.exit()
-    
-    for (action, path) in dircmp(*stat, verbose=options.verbose):
-        src = "%s%s" % (paths[0], path)
-        dst = "%s%s" % (paths[1], path)
-        if action == 'copy':
-            if islocal[0] and islocal[1]:
-                # local copy
-                shutil.copyfile(src, dst)
-            elif islocal[0] and not islocal[1]:
-                # upload
-                host[1].upload(src, dst)
-            elif islocal[1] and not islocal[0]:
-                # download
-                host[0].download(src, dst)
-            else:
-                # ????
-                source = host[0].file(src, 'r')
-                target = host[1].file(dst, 'w')
-                host[1].copyfileobj(source, target)
-                source.close()
-                target.close()
-            print action, src, "->", dst
-            
-        elif action == 'remove':
-            if islocal[1]:
-                # local copy
-                os.remove(dst)
-            elif not islocal[1]:
-                # upload
-                host[1].remove(dst)
-            print action, dst
-
-        elif action == 'mkdir':
-            if islocal[1]:
-                # local copy
-                os.mkdir(dst)
-            elif not islocal[1]:
-                # upload
-                host[1].mkdir(dst)
-            print action, dst
-            
-        elif action == 'rmtree':
-            if islocal[1]:
-                # local copy
-                shutil.rmtree(dst)
-            elif not islocal[1]:
-                # upload
-                host[1].rmtree(dst)
-            print action, dst
-
-def remote_walkdir(path):
-    import urllib2
-    
-    f = urllib2.urlopen("http://www.terranovanet.it/cgi-bin/remotefsync.py?%s" % path)
-    data = pickle.load(f)
-    f.close()
-    return data
-    
-def process_remote_dir():
-    curdir = os.environ.get('DOCUMENT_ROOT', "..")
-    
-    print "Content-Type: text/plain"
-    print "Cache-Control: no-store, no-cache, must-revalidate"
-    print "Pragma: no-cache\n"
-    path = os.environ['QUERY_STRING']
-    if path[0] == os.sep:
-        path = path[1:]
-        
-    path = os.path.join(curdir, path)
-    path = os.path.normpath(path)
-    if os.path.isdir(path):
-        print pickle.dumps(walkdir(path))
 
 if __name__ == '__main__':
-    if os.environ.has_key('QUERY_STRING'):
-        process_remote_dir()
-    else:
-        main()
+    main()
     

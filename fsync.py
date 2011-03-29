@@ -239,7 +239,8 @@ class FileSync:
             src = self.source.abspath(path)
             dst = self.target.abspath(path)
             if callback:
-                callback(action, path)
+                if not callback(action, path):
+                    break
             if action == 'copy':
                 source = self.source.open(src, "rb")
                 try:

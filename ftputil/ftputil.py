@@ -357,7 +357,7 @@ class FTPHost(object):
                   "time shift (%.2f s) deviates more than %d s from full hours"
                   % (time_shift, maximum_deviation))
 
-    def synchronize_times(self):
+    def synchronize_times(self, prepend=''):
         """
         Synchronize the local times of FTP client and server. This
         is necessary to let `upload_if_newer` and `download_if_newer`
@@ -379,7 +379,7 @@ class FTPHost(object):
 
         If `synchronize_times` fails, it raises a `TimeShiftError`.
         """
-        helper_file_name = "_ftputil_sync_"
+        helper_file_name = "%s_ftputil_sync_" % prepend
         # Open a dummy file for writing in the current directory
         #  on the FTP host, then close it.
         try:
@@ -388,8 +388,8 @@ class FTPHost(object):
             file_.close()
         except ftp_error.FTPIOError:
             raise ftp_error.TimeShiftError(
-                  '''couldn't write helper file in directory "%s"''' %
-                  self.getcwd())
+                  '''couldn't write helper file %s in directory "%s"''' % 
+                  (helper_file_name, self.getcwd()))
         # If everything worked up to here it should be possible to stat
         #  and then remove the just-written file.
         try:

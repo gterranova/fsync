@@ -27,13 +27,33 @@ except ImportError:
 CHUNK_SIZE = 64*1024
 
 class CommonPath:
+
+    def load_cache(self):
+        try:
+            f = self.open(self.abspath(".fsync.dat"), "r")
+            self.cache = pickle.load(f)
+            f.close()
+        except:
+            self.cache = {}
+
+    def write_cache(self):
+        f = self.open(self.abspath(".fsync.dat"), "w")
+        f.write(pickle.dumps(self.cache))
+        f.close()
+        
     def md5file(self, path):
-        if self.path.isdir(path):
+        fullpath = self.abspath(path)
+        if self.path.isdir(fullpath):
             return None
-    
+        if path == '/.fsync.dat':
+            return None
+
+        if self.cache and self.cache.has_key(path) and self.__class__.__name__ == 'FTPPath':
+            return self.cache[path]
+        
         # Do md5 check to make sure the file downloaded properly
         checksum = md5()
-        f = self.open(path, 'rb')
+        f = self.open(fullpath, 'rb')
         # Although the files are small, we can't guarantee the available memory nor that there
         # won't be large files in the future, so read the file in small parts (1kb at time)
         while True:
@@ -43,29 +63,32 @@ class CommonPath:
             checksum.update(part)               
         f.close()            
         # Do we have a match?
-        return checksum.hexdigest()
+        self.cache[path] = ret = checksum.hexdigest()
+        return ret
 
-    def walkdir(self, path):
-        #print "::walkdir %s" % path
-        if path[-1] != self.sep:
-            path = "%s%s" % (path, self.sep)
-        pathlen = len(path)-1        
-        listdir = set(self.listdir(path))
+    def walkdir(self, path='/', base=''):
+        fullpath = self.path.join(base, path)
+##        print "::walkdir %s" % fullpath
+        listdir = set(self.listdir(self.abspath(fullpath)))
 
         ret = {'subdirs': {}}
         def set_item(name):
-            fullpath = self.path.join(path, name)
-            basepath = fullpath[pathlen:].replace("\\", "/")
-            if not self.path.isdir(fullpath):
-                ret[basepath] = None #self.md5file(fullpath)
+            mypath = self.path.join(fullpath, name)
+            mypath = mypath.replace('\\', '/')
+            if not self.path.isdir(self.abspath(mypath)):
+                ret[mypath] = self.md5file(mypath)
             else:
-                ret['subdirs']["%s%s" % ("/", name)] = self.walkdir(fullpath)
+                ##ret['subdirs']["%s%s" % ("/", name)] = self.walkdir(name, base=fullpath)
+                ret['subdirs'][mypath] = self.walkdir(name, base=fullpath)
 
         map(set_item, listdir)    
         return ret
 
     def abspath(self, path):
-        return "%s%s" % (self.basepath, path)
+        ret = self.basepath + path
+        ret = ret.replace('\\', '/')
+        ret = ret.replace('//', '/')
+        return ret
 
 class FTPPath(ftputil_FTPHost, CommonPath):
     def __init__(self, p, verbose=True):
@@ -82,8 +105,9 @@ class FTPPath(ftputil_FTPHost, CommonPath):
         self.verbose = verbose    
         ftputil.FTPHost.__init__(self, p.hostname, username, password)
         self.basepath = p.path
-        self.synchronize_times()
-
+        ##self.synchronize_times(prepend='www.terranovanet.it/')
+        self.load_cache()        
+            
     def mtime(self, path):
         """Return the timestamp for the last modification in seconds."""
         # Convert to client time zone (see definition of time
@@ -98,13 +122,13 @@ class FTPPath(ftputil_FTPHost, CommonPath):
 class LocalPath(CommonPath):
     def __init__(self, p, verbose=True):
         self.basepath = os.path.abspath(p)
-        self.sep = os.sep
         self.path = os.path
         self.mkdir = os.mkdir
         self.remove = os.remove
         self.rmtree = shutil.rmtree
         self.listdir = os.listdir
-
+        self.load_cache()
+            
     def open(self, path, mode):
         """
         Return a Python file object for file name `path`, opened in
@@ -164,13 +188,13 @@ class FileSync:
         if not self.target.path.isdir(self.target.basepath):
             target_walk = {'subdirs': {}}
         else:
-            target_walk = self.target.walkdir(self.target.basepath)
-        self.actions = self.dircmp(self.source.walkdir(self.source.basepath), target_walk)
+            target_walk = self.target.walkdir()
+        self.actions = self.dircmp(self.source.walkdir(), target_walk)
         return self.actions
 
     def filecmp(self, f):
-        return self.source_is_newer_than_target(f) and self.source.md5file(self.source.abspath(f)) != self.target.md5file(self.target.abspath(f))
-        #return self.source.md5file(self.source.abspath(f)) != self.target.md5file(self.target.abspath(f))
+        return self.source.md5file(f) != self.target.md5file(f)
+        #return self.source_is_newer_than_target(f) and self.source.md5file(self.source.abspath(f)) != self.target.md5file(self.target.abspath(f))
 
     def source_is_newer_than_target(self, path):
         """
@@ -207,19 +231,19 @@ class FileSync:
                 dir1 & dir2,     # commondirs
                 )
    
-    def dircmp(self, set1, set2, prepend=''):
+    def dircmp(self, set1, set2):
         actions = []
 
         (newfiles, removedfiles, commonfiles, newdirs, removeddirs, commondirs) = FileSync.set_compare(set1, set2)
 
         def set_action(act, filename, condition=True):
-            if condition:
-                if self.verbose: print "%s %s%s" % (act, prepend, filename)
-                actions.append((act, "%s%s" % (prepend, filename)))
+            if condition and filename != '/.fsync.dat':
+                if self.verbose: print "%s %s" % (act,filename)
+                actions.append((act, "%s" % (filename)))
 
         map(lambda x: set_action("copy", x), newfiles)
         map(lambda x: set_action("remove", x), removedfiles)
-        map(lambda x: set_action("copy", x, self.filecmp("%s%s" % (prepend, x))), commonfiles)
+        map(lambda x: set_action("copy", x, self.filecmp(x)), commonfiles)
         map(lambda x: set_action("mkdir", x), newdirs)
         map(lambda x: set_action("rmtree", x), removeddirs)
        
@@ -229,12 +253,16 @@ class FileSync:
                 sub2 = set2['subdirs'][f]
             except:
                 sub2 = {}
-            actions.extend( self.dircmp(sub1, sub2, "%s%s" % (prepend, f)) )
+            actions.extend( self.dircmp(sub1, sub2)) 
            
         return actions
       
     def sync(self, callback=None):
         self._mkdir(self.target.basepath)
+        self.source.write_cache()
+        if len(self.actions)>0:
+            self.actions.append(('copy', '/.fsync.dat'))
+            
         for (action, path) in self.actions:
             src = self.source.abspath(path)
             dst = self.target.abspath(path)
@@ -251,9 +279,9 @@ class FileSync:
                         target.close()
                 finally:
                     source.close()               
-#                print action, src, "->", dst
+                print action, src, "->", dst
             else:
-#                print action, dst
+                print action, dst
                 func = getattr(self.target, action)
                 func(dst)
 

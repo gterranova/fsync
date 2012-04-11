@@ -30,14 +30,14 @@ class CommonPath:
 
     def load_cache(self):
         try:
-            f = self.open(self.abspath(".fsync.dat"), "r")
+            f = self.open(self.abspath("/.fsync.dat"), "r")
             self.cache = pickle.load(f)
             f.close()
         except:
             self.cache = {}
 
     def write_cache(self):
-        f = self.open(self.abspath(".fsync.dat"), "w")
+        f = self.open(self.abspath("/.fsync.dat"), "w")
         f.write(pickle.dumps(self.cache))
         f.close()
         
@@ -88,6 +88,7 @@ class CommonPath:
         ret = self.basepath + path
         ret = ret.replace('\\', '/')
         ret = ret.replace('//', '/')
+        print ret
         return ret
 
 class FTPPath(ftputil_FTPHost, CommonPath):

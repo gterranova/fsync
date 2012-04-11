@@ -3,3 +3,4 @@ glob:*.pyc
 syntax: glob
 fsync.dat
 *.bak
+.fsync.dat

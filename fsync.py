@@ -88,7 +88,6 @@ class CommonPath:
         ret = self.basepath + path
         ret = ret.replace('\\', '/')
         ret = ret.replace('//', '/')
-        print ret
         return ret
 
 class FTPPath(ftputil_FTPHost, CommonPath):
@@ -280,9 +279,9 @@ class FileSync:
                         target.close()
                 finally:
                     source.close()               
-                print action, src, "->", dst
+                if self.verbose: print action, src, "->", dst
             else:
-                print action, dst
+                if self.verbose: print action, dst
                 func = getattr(self.target, action)
                 func(dst)
 
